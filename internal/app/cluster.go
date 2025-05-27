@@ -1,12 +1,18 @@
 package app
 
-import "github.com/itsshashank/consensus/internal/core"
+import (
+	"fmt"
+
+	"github.com/itsshashank/consensus/internal/adapter/storage"
+	"github.com/itsshashank/consensus/internal/core"
+)
 
 func StartCluster(nodeCount int, net core.Network) []*core.Node {
 	var nodes []*core.Node
 	for i := 0; i < nodeCount; i++ {
 		peers := makePeers(i, nodeCount)
-		n := core.NewNode(i, peers, net)
+		store := storage.NewFileStorage(fmt.Sprintf("node%d.json", i))
+		n := core.NewNode(i, peers, net, store)
 		go n.Run()
 		nodes = append(nodes, n)
 	}

@@ -44,5 +44,7 @@ func (n *Network) Send(msg types.Message) {
 }
 
 func (n *Network) Unregister(id int) {
+	n.mx.Lock()
+	defer n.mx.Unlock()
 	delete(n.Nodes, id)
 }

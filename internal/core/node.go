@@ -24,23 +24,27 @@ type Node struct {
 	Network       Network
 	ElectionReset chan struct{}
 	AckCount      map[int]int
+	Storage       Storage
 }
 
-func NewNode(id int, peers []int, net Network) *Node {
+func NewNode(id int, peers []int, net Network, store Storage) *Node {
 	ch := make(chan types.Message, 100)
 	net.Register(id, ch)
+	term, votedFor, log, _ := store.LoadState()
+
 	return &Node{
 		ID:            id,
 		State:         types.Follower,
-		CurrentTerm:   0,
-		VotedFor:      -1,
+		CurrentTerm:   term,
+		VotedFor:      votedFor,
+		Log:           log,
+		CommitIndex:   -1,
 		Peers:         peers,
 		MsgCh:         ch,
 		Network:       net,
 		ElectionReset: make(chan struct{}),
-		Log:           []types.LogEntry{},
-		CommitIndex:   -1,
 		AckCount:      map[int]int{},
+		Storage:       store,
 	}
 }
 
@@ -77,6 +81,7 @@ func (n *Node) startElection() {
 	n.VotedFor = n.ID
 	n.VoteCount = 1
 	term := n.CurrentTerm
+	_ = n.Storage.SaveState(n.CurrentTerm, n.VotedFor, n.Log)
 	n.Mu.Unlock()
 
 	slog.Info(fmt.Sprintf("[Node %d] Became Candidate (Term %d)", n.ID, term))
@@ -143,6 +148,7 @@ func (n *Node) ProposeCommand(cmd string) {
 	entry := types.LogEntry{Term: n.CurrentTerm, Command: cmd}
 	n.Log = append(n.Log, entry)
 	term := n.CurrentTerm
+	_ = n.Storage.SaveState(n.CurrentTerm, n.VotedFor, n.Log)
 	n.Mu.Unlock()
 
 	slog.Info(fmt.Sprintf("[Node %d] Appended command to own log: %s", n.ID, cmd))
@@ -183,6 +189,7 @@ func (n *Node) handleMessage(msg types.Message) {
 				Term: n.CurrentTerm,
 			})
 			slog.Info(fmt.Sprintf("[Node %d] Voted for %d (Term %d)", n.ID, msg.From, n.CurrentTerm))
+			_ = n.Storage.SaveState(n.CurrentTerm, n.VotedFor, n.Log)
 		}
 
 	case "Vote":
@@ -197,10 +204,6 @@ func (n *Node) handleMessage(msg types.Message) {
 		if msg.Term >= n.CurrentTerm {
 			n.CurrentTerm = msg.Term
 			n.State = types.Follower
-			select {
-			case n.ElectionReset <- struct{}{}:
-			default:
-			}
 
 			if msg.PrevLogIndex >= 0 {
 				if msg.PrevLogIndex >= len(n.Log) || n.Log[msg.PrevLogIndex].Term != msg.PrevLogTerm {
@@ -224,6 +227,7 @@ func (n *Node) handleMessage(msg types.Message) {
 					n.CommitIndex = lastIndex
 				}
 			}
+			_ = n.Storage.SaveState(n.CurrentTerm, n.VotedFor, n.Log)
 			n.Network.Send(types.Message{
 				From:        n.ID,
 				To:          msg.From,
@@ -237,6 +241,7 @@ func (n *Node) handleMessage(msg types.Message) {
 		if n.AckCount[msg.CommitIndex] > len(n.Peers)/2 && n.CommitIndex < msg.CommitIndex {
 			n.CommitIndex = msg.CommitIndex
 			slog.Info(fmt.Sprintf("[Node %d] Committed index %d", n.ID, msg.CommitIndex))
+			_ = n.Storage.SaveState(n.CurrentTerm, n.VotedFor, n.Log)
 		}
 	}
 }
